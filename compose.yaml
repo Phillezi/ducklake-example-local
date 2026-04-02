@@ -1,0 +1,91 @@
+x-minio-secrets:
+  _: &minio-root-user ducklake
+  __: &minio-root-password minioadmin
+
+# NOTE: MINIO is deprecated and we wont use it for the cloud deployment
+# instead we use garage, but minio is a bit simpler to setup / use
+# So in this local env it is used
+x-minio-common: &minio-common
+  image: quay.io/minio/minio:latest
+  command: server --console-address ":9001" /data/minio
+  expose:
+    - "9000"
+    - "9001"
+  environment:
+    MINIO_ROOT_USER: *minio-root-user
+    MINIO_ROOT_PASSWORD: *minio-root-password
+    MINIO_REGION_NAME: local
+    MINIO_REGION: local
+  healthcheck:
+    test: ["CMD", "mc", "ready", "local"]
+    interval: 5s
+    timeout: 5s
+    retries: 5
+  restart: unless-stopped
+
+services:
+  minio:
+    <<: *minio-common
+    hostname: minio
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - s3_data:/data
+
+  # Sets up a bucket
+  mc:
+    image: minio/mc:latest
+    container_name: minio-client
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: *minio-root-user
+      MINIO_ROOT_PASSWORD: *minio-root-password  
+      MINIO_REGION_NAME: local
+      MINIO_REGION: local
+    restart: on-failure
+    entrypoint: /bin/sh
+    command: >
+      -c "
+      set -e;
+      echo 'Waiting for MinIO...';
+      mc alias set local http://minio:9000 ${MINIO_ROOT_USER:-ducklake} ${MINIO_ROOT_PASSWORD:-minioadmin};
+      mc mb local/ducklake;
+      mc policy set public local/ducklake;
+      echo 'Bucket created';
+      exit 0;
+      "
+
+  # for the metadata
+  postgres:
+    image: postgres:17-alpine
+    container_name: postgres
+    restart: unless-stopped
+
+    environment:
+      POSTGRES_DB: ducklake
+      POSTGRES_USER: duck
+      POSTGRES_PASSWORD: postgres
+
+      # keeps data in proper directory inside the volume
+      PGDATA: /var/lib/postgresql/data/pgdata
+
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U duck -d ducklake"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+    ports:
+      - "5432:5432"
+
+volumes:
+  s3_data:
+  postgres_data:
+
